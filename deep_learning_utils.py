@@ -120,7 +120,7 @@ def predict_recordings(estimator, X, y):
     df['y_true'] = y
     df['y_pred'] = y_pred
     # average the predictions (and labels) by recording
-    df = df.groupby('rec').mean()
+    df = df.groupby('rec').mean(numeric_only=True)
     return df['y_true'].values, df['y_pred'].values
 
 
@@ -184,7 +184,7 @@ def create_windows_ds_from_mne_epochs(
         A braindecode WindowsDataset.
     """
     try:
-        epochs = mne.read_epochs(fname=fname, preload=preload)
+        epochs = mne.read_epochs(fname=fname, preload=preload, verbose='error')
     except FileNotFoundError:
         return None
 
@@ -328,6 +328,7 @@ def create_model(model_name, window_size, n_channels, cropped, seed):
     """
     # check if GPU is available, if True chooses to use it
     cuda = torch.cuda.is_available()
+    print('cuda', cuda)
     if cuda:
         torch.backends.cudnn.benchmark = True
     # Set random seed to be able to reproduce results
@@ -337,7 +338,7 @@ def create_model(model_name, window_size, n_channels, cropped, seed):
     if model_name == 'shallow':
         if cropped:
             window_size = None
-            final_conv_length = 35
+            final_conv_length = 30
         model = ShallowFBCSPNet(
             in_chans=n_channels,
             n_classes=1,
@@ -359,23 +360,55 @@ def create_model(model_name, window_size, n_channels, cropped, seed):
         )
         lr = 1 * 0.01
         weight_decay = 0.5 * 0.001
+    elif model_name == 'tcn':
+        import sys
+        sys.path.insert(0, '/home/jovyan/workspace-tueg/tueg_age_decoding/')
+        from decode_tueg import get_model, add_sigmoid
+        model, lr, weight_decay = get_model(
+            n_channels=n_channels,
+            seed=seed,
+            cuda=cuda,
+            target_name='age',
+            model_name='tcn',
+            cropped=0,
+            window_size_samples=window_size,
+            squash_outs=0,
+        )
     else:
         raise ValueError(f'Model {model_name} unknown.')
 
-    if cropped:
-        to_dense_prediction_model(model)
+    if model_name in ['shallow', 'deep']:
+        if cropped:
+            to_dense_prediction_model(model)
 
-    # remove the softmax layer from models
-    new_model = torch.nn.Sequential()
-    for name, module_ in model.named_children():
-        if "softmax" in name:
-            continue
-        new_model.add_module(name, module_)
+        # remove the softmax layer from models
+        new_model = torch.nn.Sequential()
+        for name, module_ in model.named_children():
+            if "softmax" in name:
+                continue
+            new_model.add_module(name, module_)
+        model = new_model
 
     if cropped:
+        print('adding global pool (~ cropped decoding)')
+        new_model = torch.nn.Sequential()
+        new_model.add_module(model_name, model)
         new_model.add_module('global_pool', torch.nn.AdaptiveAvgPool1d(1))
         new_model.add_module('squeeze2', Expression(squeeze_to_ch_x_classes))
-    model = new_model
+        model = new_model
+    
+    if model_name in ['tcn']:
+        # print('adding sigmoid')
+        # TODO: can sigmoid cause trouble with TransformedTargetRegressor?
+        # model = add_sigmoid(model_name, model)
+        # deepcopy of tcn raises: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment
+        # following https://github.com/pytorch/pytorch/issues/28594#issuecomment-1149882811
+        # delete weight norm of every conv of every temporal block in the tcn  
+        print('deleting weight_norm weight for scikit-learn compatibility')
+        for m in model.modules():
+            if hasattr(m, 'weight_g') and hasattr(m, 'weight_v'):
+                del m.weight
+    print(model)
 
     # Send model to GPU
     if cuda:
@@ -532,6 +565,16 @@ def create_dataset_target_model(
         weight_decay=weight_decay,
         n_jobs=n_jobs,
     )
+    
+    if model_name == 'tcn':
+        from braindecode.augmentation import AugmentedDataLoader, ChannelsDropout
+        estimator.set_params(**{
+            'iterator_train__transforms': [
+                ChannelsDropout(probability=1, p_drop=.2, random_state=seed),
+            ],
+            'iterator_train': AugmentedDataLoader,
+        })
+    
     # use a StandardScaler to scale targets to zero mean unit variance fold
     # by fold to facilitate model training. in estimator.predict, the inverse
     # transform is applied, such that we can compute scores based on unscaled
@@ -548,7 +591,7 @@ def create_dataset_target_model(
     return X, y, estimator, valid_fnames
 
 
-def get_fif_paths(dataset, cfg):
+def get_fif_paths(dataset, cfg, processing):
     """Create a list of fif files of given dataset.
 
     Parameters
@@ -581,7 +624,7 @@ def get_fif_paths(dataset, cfg):
     fpaths = []
     for subject in subjects:
         bp_args = dict(root=cfg.deriv_root, subject=subject,
-                       datatype=cfg.data_type, processing="autoreject",
+                       datatype=cfg.data_type, processing=processing,
                        task=cfg.task,
                        check=False, suffix="epo")
 

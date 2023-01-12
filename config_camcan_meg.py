@@ -2,12 +2,9 @@ import pathlib
 
 study_name = "age-prediction-benchmark"
 
-bids_root = pathlib.Path(
-    '/storage/store/data/camcan/BIDSsep/rest')
-
-deriv_root = pathlib.Path('/storage/store3/derivatives/camcan-bids/derivatives')
-
-subjects_dir = pathlib.Path('/storage/store/data/camcan-mne/freesurfer')
+bids_root = pathlib.Path('/home/jovyan/mne_data/CAMCAN/cc700/meg/pipeline/release005/BIDSsep/rest/')
+deriv_root = pathlib.Path('/home/jovyan/bids/camcan_pre/')
+subjects_dir = pathlib.Path('/home/jovyan/freesurfer/')
 
 source_info_path_update = {'processing': 'autoreject',
                            'suffix': 'epo'}
@@ -71,8 +68,13 @@ rest_epochs_overlap = 0.
 rest_epochs_duration = 10.
 baseline = None
 
-mf_cal_fname = '/storage/store/data/camcan-mne/Cam-CAN_sss_cal.dat'
-mf_ctc_fname = '/storage/store/data/camcan-mne/Cam-CAN_ct_sparse.fif'
+# TODO: how to obtain these files?
+# running preprocessing gives the error: 
+# "Could not find Maxwell Filter Calibration file at /storage/store/data/camcan-mne/Cam-CAN_sss_cal.dat."
+mf_cal_fname = "/home/jovyan/brain-age-benchmark-paper/calibration/sss_cal_CTB_1.dat"
+#'/storage/store/data/camcan-mne/Cam-CAN_sss_cal.dat'
+mf_ctc_fname = "/home/jovyan/brain-age-benchmark-paper/calibration/ct_sparse_CTB.fif"
+#'/storage/store/data/camcan-mne/Cam-CAN_ct_sparse.fif'
 
 find_flat_channels_meg = True
 find_noisy_channels_meg = True
@@ -97,5 +99,5 @@ mne_log_level = "error"
 # on_error = 'continue'
 on_error = "continue"
 
-N_JOBS = 40
-subjects = ['CC110033']
+#N_JOBS = 40
+# subjects = ['CC110033']

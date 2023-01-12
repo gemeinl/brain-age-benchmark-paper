@@ -17,6 +17,7 @@ import argparse
 import datetime
 
 import mne
+mne.set_log_level('ERROR')
 import numpy as np
 from braindecode.datasets import TUHAbnormal
 from mne_bids import write_raw_bids, print_dir_tree, make_report, BIDSPath
@@ -129,7 +130,7 @@ def _convert_tuh_recording_to_bids(ds, bids_save_dir, desc=None):
 
 def convert_tuab_to_bids(tuh_data_dir, bids_save_dir, healthy_only=True,
                          reset_session_indices=True, concat_split_files=True,
-                         n_jobs=1):
+                         DEBUG=False, n_jobs=1):
     """Convert TUAB dataset to BIDS format.
 
     Parameters
@@ -150,7 +151,9 @@ def convert_tuab_to_bids(tuh_data_dir, bids_save_dir, healthy_only=True,
     n_jobs : None | int
         Number of jobs for parallelization.
     """
-    concat_ds = TUHAbnormal(tuh_data_dir, recording_ids=None, n_jobs=n_jobs)
+    recording_ids = list(range(5)) if DEBUG else None
+    concat_ds = TUHAbnormal(
+        tuh_data_dir, n_jobs=n_jobs, recording_ids=recording_ids)
 
     if healthy_only:
         concat_ds = concat_ds.split(by='pathological')['False']
@@ -176,11 +179,9 @@ def convert_tuab_to_bids(tuh_data_dir, bids_save_dir, healthy_only=True,
 
 
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser(description='Convert TUH to BIDS.')
     parser.add_argument(
         '--tuab_data_dir', type=str,
-        default='/storage/store/data/tuh_eeg/www.isip.piconepress.com/projects/tuh_eeg/downloads/tuh_eeg_abnormal/v2.0.0/edf',
         help='Path to the original data.')
     parser.add_argument(
         '--bids_data_dir', type=str,
@@ -194,11 +195,15 @@ if __name__ == '__main__':
     parser.add_argument(
         '--n_jobs', type=int, default=1,
         help='number of parallel processes to use (default: 1)')
+    parser.add_argument(
+        '--DEBUG', type=bool, default=False,
+        help='Run on tiny subset of recordings for debugging purposes')
     args = parser.parse_args()
 
     convert_tuab_to_bids(
         args.tuab_data_dir, args.bids_data_dir, healthy_only=args.healthy_only,
-        reset_session_indices=args.reset_session_indices, n_jobs=args.n_jobs)
+        reset_session_indices=args.reset_session_indices, DEBUG=args.DEBUG,
+        n_jobs=args.n_jobs)
 
     print_dir_tree(args.bids_data_dir)
     print(make_report(args.bids_data_dir))

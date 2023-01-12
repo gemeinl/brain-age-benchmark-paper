@@ -16,6 +16,8 @@ from utils import prepare_dataset
 
 DATASETS = ['chbp', 'lemon', 'tuab', 'camcan']
 FEATURE_TYPE = ['fb_covs', 'handcrafted', 'source_power']
+PROCESSINGS = ['autoreject', 'noautoreject']
+
 parser = argparse.ArgumentParser(description='Compute features.')
 parser.add_argument(
     '-d', '--dataset',
@@ -27,26 +29,40 @@ parser.add_argument(
     default=None,
     nargs='+', help='Type of features to compute')
 parser.add_argument(
+    '-p', '--processing',
+    default=None,
+    nargs='+', help='Type of pre-processing, e.g. autoreject, noautoreject')
+parser.add_argument(
     '--n_jobs', type=int, default=1,
     help='number of parallel processes to use (default: 1)')
-
+parser.add_argument(
+    '--DEBUG', type=bool, default=False,
+    help='Run on tiny subset of recordings for debugging purposes')
 args = parser.parse_args()
 datasets = args.dataset
 feature_types = args.feature_type
 n_jobs = args.n_jobs
+DEBUG = args.DEBUG
+processings = args.processing
+
 if datasets is None:
     datasets = list(DATASETS)
 if feature_types is None:
     feature_types = list(FEATURE_TYPE)
-tasks = [(ds, bs) for ds in datasets for bs in feature_types]
-for dataset, feature_type in tasks:
+if processings is None:
+    processings = list(PROCESSINGS)
+tasks = [(ds, bs, ps) for ds in datasets for bs in feature_types for ps in processings]
+for dataset, feature_type, processing in tasks:
     if dataset not in DATASETS:
         raise ValueError(f"The dataset '{dataset}' passed is unkonwn")
     if feature_type not in FEATURE_TYPE:
         raise ValueError(f"The benchmark '{feature_type}' passed is unkonwn")
+    if processing not in PROCESSINGS:
+        raise ValueError(f"The proceesing '{prcessing}' passed is unkonwn")
 print(f"Running benchmarks: {', '.join(feature_types)}")
 print(f"Datasets: {', '.join(datasets)}")
-DEBUG = False
+print(f"Processings: {', '.join(processings)}")
+
 frequency_bands = {
     "low": (0.1, 1),
     "delta": (1, 4),
@@ -134,7 +150,7 @@ def extract_source_power(bp, info, subject, subjects_dir, covs):
     return result
 
 
-def run_subject(subject, cfg, condition):
+def run_subject(subject, cfg, condition, processing):
     task = cfg.task
     deriv_root = cfg.deriv_root
     data_type = cfg.data_type
@@ -143,7 +159,7 @@ def run_subject(subject, cfg, condition):
         session = session.lstrip('ses-')
 
     bp_args = dict(root=deriv_root, subject=subject,
-                   datatype=data_type, processing="autoreject",
+                   datatype=data_type, processing=processing,
                    task=task,
                    check=False, suffix="epo")
     if session:
@@ -178,11 +194,11 @@ def run_subject(subject, cfg, condition):
     return out
 
 
-for dataset, feature_type in tasks:
+for dataset, feature_type, processing in tasks:
     cfg, subjects = prepare_dataset(dataset)
     N_JOBS = cfg.N_JOBS if not n_jobs else n_jobs
     if DEBUG:
-        subjects = subjects[:1]
+        subjects = subjects[:5]
         N_JOBS = 1
         frequency_bands = {"alpha": (8.0, 15.0)}
         hc_selected_funcs = ['std']
@@ -191,9 +207,17 @@ for dataset, feature_type in tasks:
     for condition in cfg.feature_conditions:
         print(
             f"Computing {feature_type} features on {dataset} for '{condition}'")
-        features = Parallel(n_jobs=N_JOBS)(
-            delayed(run_subject)(sub.split('-')[1], cfg=cfg,
-            condition=condition) for sub in subjects)
+        if N_JOBS != 1:
+            features = Parallel(n_jobs=N_JOBS)(
+                delayed(run_subject)(sub.split('-')[1], cfg=cfg,
+                condition=condition, processing=processing) 
+                for sub in subjects)
+        else:
+            features = []
+            for sub in subjects:
+                f = run_subject(sub.split('-')[1], cfg=cfg,
+                                condition=condition, processing=processing)
+                features.append(f)
 
         out = {sub: ff for sub, ff in zip(subjects, features)
                if not isinstance(ff, str)}
@@ -206,9 +230,9 @@ for dataset, feature_type in tasks:
         elif dataset in ("tuab", 'camcan'):
             label = 'rest'
 
-        out_fname = cfg.deriv_root / f'features_{feature_type}_{label}.h5'
+        out_fname = cfg.deriv_root / f'{processing}_features_{feature_type}_{label}.h5'
         log_out_fname = (
-            cfg.deriv_root / f'feature_{feature_type}_{label}-log.csv')
+            cfg.deriv_root / f'{processing}_feature_{feature_type}_{label}-log.csv')
 
         h5io.write_hdf5(
             out_fname,

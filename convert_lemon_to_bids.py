@@ -1,24 +1,26 @@
 import argparse
 import os
 import pathlib
-from tkinter import BOTTOM
 import urllib.request
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 import mne
-from mne.io.brainvision.brainvision import _aux_vhdr_info
 
 from mne_bids import write_raw_bids, print_dir_tree, make_report, BIDSPath
 
 lemon_info = pd.read_csv(
-    "./META_File_IDs_Age_Gender_Education_Drug_Smoke_SKID_LEMON.csv")
+    "/home/jovyan/META_File_IDs_Age_Gender_Education_Drug_Smoke_SKID_LEMON.csv")
 lemon_info = lemon_info.set_index("ID")
-eeg_subjects = pd.read_csv('./lemon_eeg_subjects.csv')
+eeg_subjects = pd.read_csv('/home/jovyan/brain-age-benchmark-paper/lemon_eeg_subjects.csv')
 lemon_info = lemon_info.loc[eeg_subjects.subject]
 lemon_info['gender'] = lemon_info['Gender_ 1=female_2=male'].map({1: 2, 2: 1})
+lemon_info['hand'] = lemon_info['Handedness'].map(
+    {'right': 1, 'left': 2, 'ambidextrous': 3})
 lemon_info['age_guess'] = np.array(
-  lemon_info['Age'].str.split('-').tolist(), dtype=np.int).mean(1)
+  lemon_info['Age'].str.split('-').tolist(), dtype=int).mean(1).astype(int)
+# lemon_info['age_guess'] = np.array(
+#   lemon_info['Age'].str.split('-').tolist(), dtype=int).mean(1)
 subjects = list(lemon_info.index)
 
 def convert_lemon_to_bids(lemon_data_dir, bids_save_dir, n_jobs=1, DEBUG=False):
@@ -36,25 +38,40 @@ def convert_lemon_to_bids(lemon_data_dir, bids_save_dir, n_jobs=1, DEBUG=False):
     """
     subjects_ = subjects
     if DEBUG:
-        subjects_ = subjects[:1]
+        subjects_ = subjects[:5]
 
-    good_subjects = Parallel(n_jobs=n_jobs)(
-        delayed(_convert_subject)(subject, lemon_data_dir, bids_save_dir)
-        for subject in subjects_) 
+    good_subjects = []
+    for subj_i, subject in enumerate(subjects_):
+        print(f"{subj_i}/{len(subjects_)}")
+        s = _convert_subject(subject, lemon_data_dir, bids_save_dir)
+        good_subjects.append(s)
+
     subjects_ = [sub for sub in good_subjects if not isinstance(sub, tuple)]
-    _, bad_subjects, errs = zip(*[
-        sub for sub in good_subjects if isinstance(sub, tuple)])
-    bad_subjects = pd.DataFrame(
-        dict(subjects= bad_subjects, error=errs))
-    bad_subjects.to_csv(
-        '/storage/store3/data/LEMON_EEG_BIDS/bids_conv_erros.csv')
+    bad_subjects_ = [sub for sub in good_subjects if isinstance(sub, tuple)]
+    if bad_subjects_:
+        _, bad_subjects, errs = zip(*bad_subjects_)
+        bad_subjects = pd.DataFrame(
+            dict(subjects= bad_subjects, error=errs))
+        bad_subjects.to_csv(
+            '/home/jovyan/bids/lemon/bids_conv_erros.csv')
+        
+    # good_subjects = Parallel(n_jobs=n_jobs)(
+    #     delayed(_convert_subject)(subject, lemon_data_dir, bids_save_dir)
+    #     for subject in subjects_) 
+    # subjects_ = [sub for sub in good_subjects if not isinstance(sub, tuple)]
+    # _, bad_subjects, errs = zip(*[
+    #     sub for sub in good_subjects if isinstance(sub, tuple)])
+    # bad_subjects = pd.DataFrame(
+    #     dict(subjects= bad_subjects, error=errs))
+    # bad_subjects.to_csv(
+    #     '/home/jovyan/bids/lemon/bids_conv_erros.csv')
     # update the participants file as LEMON has no official age data
     participants = pd.read_csv(
-        "/storage/store3/data/LEMON_EEG_BIDS/participants.tsv", sep='\t')
+        "/home/jovyan/bids/lemon/participants.tsv", sep='\t')
     participants = participants.set_index("participant_id")
     participants.loc[subjects_, 'age'] = lemon_info.loc[subjects_, 'age_guess']
     participants.to_csv(
-        "/storage/store3/data/LEMON_EEG_BIDS/participants.tsv", sep='\t')
+        "/home/jovyan/bids/lemon/participants.tsv", sep='\t')
 
 
 def _convert_subject(subject, data_path, bids_save_dir):
@@ -70,9 +87,9 @@ def _convert_subject(subject, data_path, bids_save_dir):
         raw.info['subject_info'] = {
             'participant_id': sub_id,
             'sex': lemon_info.loc[subject, 'gender'],
-            'age': lemon_info.loc[subject, 'age_guess'],
+            'age': lemon_info.loc[subject, 'age_guess'],  # TODO: has to be int to show up in mne_bids.make_report
             # XXX LEMON shares no public age 
-            'hand': lemon_info.loc[subject, 'Handedness']
+            'hand': lemon_info.loc[subject, 'hand']
         }
         events, _ = mne.events_from_annotations(raw)
 
@@ -100,11 +117,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert LEMON to BIDS.')
     parser.add_argument(
         '--lemon_data_dir', type=str,
-        default='/storage/store3/data/LEMON_RAW',
+        # default='/storage/store3/data/LEMON_RAW',
         help='Path to the original data.')
     parser.add_argument(
         '--bids_data_dir', type=str,
-        default=pathlib.Path("/storage/store3/data/LEMON_EEG_BIDS"),
+        # default=pathlib.Path("/storage/store3/data/LEMON_EEG_BIDS"),
         help='Path to where the converted data should be saved.')
     parser.add_argument(
         '--n_jobs', type=int, default=1,

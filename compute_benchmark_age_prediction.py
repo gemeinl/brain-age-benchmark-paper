@@ -1,4 +1,12 @@
 # %% imports
+import os
+import sys
+if os.path.exists('/work/braindecode'):
+    sys.path.insert(0, '/work/braindecode')
+    sys.path.insert(0, '/work/mne-bids')
+    sys.path.insert(0, '/work/mne-bids-pipeline')
+    print('adding local code resources')
+import json
 import argparse
 import importlib
 from copy import deepcopy
@@ -24,38 +32,65 @@ from deep_learning_utils import (
 
 DATASETS = ['chbp', 'lemon', 'tuab', 'camcan']
 BENCHMARKS = ['dummy', 'filterbank-riemann', 'filterbank-source',
-              'handcrafted', 'shallow', 'deep']
+              'handcrafted', 'shallow', 'deep', 'tcn']
+PROCESSINGS = ['autoreject', 'noautoreject']
 
-parser = argparse.ArgumentParser(description='Compute features.')
-parser.add_argument(
-    '-d', '--dataset',
-    default=None,
-    nargs='+',
-    help='the dataset for which features should be computed')
-parser.add_argument(
-    '-b', '--benchmark',
-    default=None,
-    nargs='+', help='Type of features to compute')
-parser.add_argument(
-    '--n_jobs', type=int, default=1,
-    help='number of parallel processes to use (default: 1)')
+N_SPLITS = 10  # 5, 10
+N_JOBS = 1
+# if running normally
+if not os.path.exists('/work/braindecode'):
+    parser = argparse.ArgumentParser(description='Compute features.')
+    parser.add_argument(
+        '-d', '--dataset',
+        default=None,
+        nargs='+',
+        help='the dataset for which the benchmark should be computed')
+    parser.add_argument(
+        '-b', '--benchmark',
+        default=None,
+        nargs='+', help='Type of benchmark to compute')
+    parser.add_argument(
+        '-p', '--processing',
+        default=None,
+        nargs='+', help='Type of pre-processing, e.g. autoreject, clean')
+    parser.add_argument(
+        '-o', '--output',
+        default=None,
+        help='Output directory to write results')
 
-parsed = parser.parse_args()
-datasets = parsed.dataset
-benchmarks = parsed.benchmark
-N_JOBS = parsed.n_jobs
+    parsed = parser.parse_args()
+    datasets = parsed.dataset
+    benchmarks = parsed.benchmark
+    out_dir = parsed.output
+    processings = parsed.processing
+# if running on kubeflow cluster
+else:
+    print(sys.argv)
+    arguments = json.loads(sys.argv[-1])
+    print(arguments)
+    datasets = arguments['datasets']
+    benchmarks = arguments['benchmarks']
+    processings = arguments['processings']
+    out_dir = arguments['output']
+
+if processings is None:
+    processings = list(PROCESSINGS)
 if datasets is None:
     datasets = list(DATASETS)
 if benchmarks is None:
     benchmarks = list(BENCHMARKS)
-tasks = [(ds, bs) for ds in datasets for bs in benchmarks]
-for dataset, benchmark in tasks:
+tasks = [(ds, bs, ps) for ds in datasets for bs in benchmarks for ps in processings]  # TODO: check order
+for dataset, benchmark, processing in tasks:
     if dataset not in DATASETS:
         raise ValueError(f"The dataset '{dataset}' passed is unkonwn")
     if benchmark not in BENCHMARKS:
         raise ValueError(f"The benchmark '{benchmark}' passed is unkonwn")
+    if processing not in PROCESSINGS:
+        raise ValueError(f"The proceesing '{prcessing}' passed is unkonwn")
 print(f"Running benchmarks: {', '.join(benchmarks)}")
 print(f"Datasets: {', '.join(datasets)}")
+print(f"Processings: {', '.join(processings)}")
+print(f"Using {N_SPLITS} splits for cv")
 
 config_map = {'chbp': "config_chbp_eeg",
               'lemon': "config_lemon_eeg",
@@ -97,7 +132,7 @@ def aggregate_features(X, func='mean', axis=0):
     return np.vstack([aggs[func](x, axis=axis, keepdims=True) for x in X])
 
 
-def load_benchmark_data(dataset, benchmark, condition=None):
+def load_benchmark_data(dataset, benchmark, processing, condition=None):
     """Load the input features and outcome vectors for a given benchmark
 
     Parameters
@@ -124,7 +159,7 @@ def load_benchmark_data(dataset, benchmark, condition=None):
     """
     if dataset not in config_map:
         raise ValueError(
-            f"We don't know the dataset '{dataset}' you requested.")
+            f"We don't know the dataset '{dataset}' with processing '{processing}' you requested.")
 
     cfg = importlib.import_module(config_map[dataset])
     bids_root = cfg.bids_root
@@ -146,10 +181,10 @@ def load_benchmark_data(dataset, benchmark, condition=None):
 
     # Read the processing logs to see for which participants we have EEG
     X, y, model = None, None, None
-    if benchmark not in ['dummy', 'shallow', 'deep']:
+    if benchmark not in ['dummy', 'shallow', 'deep', 'tcn']:
         bench_cfg = bench_config[benchmark]
         feature_label = bench_cfg['feature_map']
-        feature_log = f'feature_{feature_label}_{condition_}-log.csv'
+        feature_log = f'{processing}_feature_{feature_label}_{condition_}-log.csv'
         proc_log = pd.read_csv(deriv_root / feature_log)
         good_subjects = proc_log.query('ok == "OK"').subject
         df_subjects = df_subjects.loc[good_subjects]
@@ -160,8 +195,9 @@ def load_benchmark_data(dataset, benchmark, condition=None):
     if benchmark == 'filterbank-riemann':
         frequency_bands = bench_cfg['frequency_bands']
         features = h5io.read_hdf5(
-            deriv_root / f'features_{feature_label}_{condition_}.h5')
+            deriv_root / f'{processing}_features_{feature_label}_{condition_}.h5')
         covs = [features[sub]['covs'] for sub in df_subjects.index]
+        print(set([c.shape for c in covs]))
         covs = np.array(covs)
         X = pd.DataFrame(
             {band: list(covs[:, ii]) for ii, band in
@@ -181,7 +217,7 @@ def load_benchmark_data(dataset, benchmark, condition=None):
     elif benchmark == 'filterbank-source':
         frequency_bands = bench_cfg['frequency_bands']
         features = h5io.read_hdf5(
-            deriv_root / f'features_{feature_label}_{condition_}.h5')
+            deriv_root / f'{processing}_features_{feature_label}_{condition_}.h5')
         source_power = [features[sub] for sub in df_subjects.index]
         source_power = np.array(source_power)
         X = pd.DataFrame(
@@ -198,7 +234,7 @@ def load_benchmark_data(dataset, benchmark, condition=None):
 
     elif benchmark == 'handcrafted':
         features = h5io.read_hdf5(
-            deriv_root / f'features_handcrafted_{condition_}.h5')
+            deriv_root / f'{processing}_features_handcrafted_{condition_}.h5')
         X = [features[sub]['feats'] for sub in df_subjects.index]
         y = df_subjects.age.values
         param_grid = {'max_depth': [4, 6, 8, 16, 32, None],
@@ -217,8 +253,11 @@ def load_benchmark_data(dataset, benchmark, condition=None):
         X = np.zeros(shape=(len(y), 1))
         model = DummyRegressor(strategy="mean")
 
-    elif benchmark in ['shallow', 'deep']:
-        fif_fnames = get_fif_paths(dataset, cfg)
+    elif benchmark in ['shallow', 'deep', 'tcn']:
+        if benchmark == 'tcn':
+            import warnings
+            warnings.filterwarnings("ignore", message="dropout2d: Received")
+        fif_fnames = get_fif_paths(dataset, cfg, processing)
         # Only keep loaded subjects
         df_subjects = df_subjects.merge(fif_fnames, on='participant_id')
         ages = df_subjects['age'].values
@@ -249,7 +288,7 @@ def load_benchmark_data(dataset, benchmark, condition=None):
             model_name=model_name,
             n_epochs=n_epochs,
             batch_size=batch_size,
-            n_jobs=N_JOBS,  # use n_jobs for parallel lazy data loading
+            n_jobs=4,  # use n_jobs for parallel lazy data loading
             cropped=cropped,
             seed=seed,
             scaling_factor=scaling_factor,
@@ -264,12 +303,13 @@ def load_benchmark_data(dataset, benchmark, condition=None):
 # %% Run CV
 
 
-def run_benchmark_cv(benchmark, dataset):
-    X, y, model, df_subjects = load_benchmark_data(dataset=dataset, benchmark=benchmark)
+def run_benchmark_cv(benchmark, dataset, processing):
+    X, y, model, df_subjects = load_benchmark_data(dataset=dataset, benchmark=benchmark, processing=processing)
     if X is None:
         print(
             "no data found for benchmark "
-            f"'{benchmark}' on dataset '{dataset}'")
+            f"'{benchmark}' on dataset '{dataset}' "
+            f"with processing {processing}")
         return
 
     ys_true, ys_pred = [], []
@@ -279,14 +319,15 @@ def run_benchmark_cv(benchmark, dataset):
         ys_pred.append(y_pred)
         return mean_absolute_error(y_true, y_pred)
 
-    metrics = [mean_absolute_error_with_memory, r2_score]
-    cv_params = dict(n_splits=10, shuffle=True, random_state=42)
 
-    if benchmark in ['shallow', 'deep']:
+    metrics = [mean_absolute_error_with_memory, r2_score]
+    cv_params = dict(n_splits=N_SPLITS, shuffle=True, random_state=42)
+
+    if benchmark in ['shallow', 'deep', 'tcn']:
         # turn off most of the mne logging. due to lazy loading we have
         # uncountable logging outputs that do cover the training logging output
         # as well as might slow down code execution
-        mne.set_log_level('ERROR')
+        # mne.set_log_level('ERROR')
         # do not run cv in parallel. we assume to only have 1 GPU
         # instead use n_jobs to (lazily) load data in parallel such that the
         # GPU does not have to wait
@@ -307,8 +348,8 @@ def run_benchmark_cv(benchmark, dataset):
 
     print("Running cross validation ...")
     scores = cross_validate(
-        model, X, y, cv=cv, scoring=scoring,
-        n_jobs=(1 if benchmark in ['filterbank-source', 'shallow', 'deep']
+        model, X, y, cv=cv, scoring=scoring, verbose=10, error_score='raise',
+        n_jobs=(None if benchmark in ['filterbank-source', 'shallow', 'deep', 'tcn']
                 else N_JOBS))  # XXX too big for joblib
     print("... done.")
 
@@ -330,7 +371,9 @@ def run_benchmark_cv(benchmark, dataset):
          'fit_time': scores['fit_time'],
          'score_time': scores['score_time'],
          'dataset': dataset,
-         'benchmark': benchmark}
+         'benchmark': benchmark,
+         'processing': processing,
+        }
     )
     for metric in ('MAE', 'r2'):
         print(f'{metric}({benchmark}, {dataset}) = {results[metric].mean()}')
@@ -338,11 +381,13 @@ def run_benchmark_cv(benchmark, dataset):
 
 
 # %% run benchmarks
-for dataset, benchmark in tasks:
-    print(f"Now running '{benchmark}' on '{dataset}' data")
-    results_df, ys = run_benchmark_cv(benchmark, dataset)
+for dataset, benchmark, processing in tasks:
+    print(f"Now running '{benchmark}' on '{dataset}' data with '{processing}' processing")
+    results_df, ys = run_benchmark_cv(benchmark=benchmark, dataset=dataset, processing=processing)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
     if results_df is not None:
         results_df.to_csv(
-            f"./results/benchmark-{benchmark}_dataset-{dataset}.csv")
+            os.path.join(out_dir, f"benchmark-{benchmark}_dataset-{dataset}_processing-{processing}.csv"))
         ys.to_csv(
-            f"./results/benchmark-{benchmark}_dataset-{dataset}_ys.csv")
+            os.path.join(out_dir, f"benchmark-{benchmark}_dataset-{dataset}_processing-{processing}_ys.csv"))

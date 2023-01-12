@@ -1,15 +1,11 @@
-import pathlib
+from pathlib import Path
 import mne
 
 study_name = "age-prediction-benchmark"
 
-bids_root = pathlib.Path(
-    "/storage/store3/data/CHBMP_EEG_and_MRI/ds_bids_chbmp")
-
-deriv_root = pathlib.Path("/storage/store3/derivatives/CHBMP_EEG_and_MRI/")
-# "/storage/store2/derivatives/eeg-pred-modeling-summer-school/")
-
-subjects_dir = pathlib.Path('/storage/store/data/camcan-mne/freesurfer')
+bids_root = Path("/home/jovyan/mne_data/CHBMP/CHBMP_EEG_and_MRI/ds_bids_chbmp/")
+deriv_root = Path("/home/jovyan/bids/chbp_pre/")
+subjects_dir = Path('/home/jovyan/freesurfer/')
 
 source_info_path_update = {'processing': 'autoreject',
                            'suffix': 'epo'}
@@ -33,7 +29,7 @@ analyze_channels = [
 ]
 
 eeg_template_montage = mne.channels.make_standard_montage("standard_1005")
-eeg_template_montage.rename_channels({"FFT7h": "FFC7h", "FFT8h": "FFC8h"})
+# eeg_template_montage.rename_channels({"FFT7h": "FFC7h", "FFT8h": "FFC8h"})
 
 l_freq = 0.1
 h_freq = 49

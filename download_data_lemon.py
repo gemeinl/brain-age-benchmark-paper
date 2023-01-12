@@ -9,9 +9,9 @@ url_lemon = ('https://ftp.gwdg.de/pub/misc/MPI-Leipzig_Mind-Brain-Body-LEMON'
              '/EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID/')
 
 lemon_info = pd.read_csv(
-  "./META_File_IDs_Age_Gender_Education_Drug_Smoke_SKID_LEMON.csv")
+  "/home/jovyan/META_File_IDs_Age_Gender_Education_Drug_Smoke_SKID_LEMON.csv")
 
-data_path = pathlib.Path("/storage/store3/data/LEMON_RAW")
+data_path = pathlib.Path("/home/jovyan/mne_data/LEMON/")
 
 if not data_path.exists():
     os.makedirs(data_path)
@@ -23,7 +23,8 @@ if DEBUG:
 extensions = ["eeg", "vhdr", "vmrk"]
 good_subjects = list()
 
-for sub in subjects:
+for sub_i, sub in enumerate(subjects):
+    print(f"{sub_i}/{len(subjects)}")
     for ext in extensions:
         sub_url = f"{sub}/RSEEG/{sub}.{ext}"
         url = f"{url_lemon}/{sub_url}"
@@ -38,4 +39,4 @@ for sub in subjects:
             print(err)
 
 good_subs_df = pd.DataFrame(dict(subject=list(set(good_subjects))))
-good_subs_df.to_csv('good_subjects.csv')
+good_subs_df.to_csv('/home/jovyan/mne_data/LEMON/good_subjects.csv')
